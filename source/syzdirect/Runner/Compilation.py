@@ -18,8 +18,17 @@ def PrepareSourceCode():
         checkoutcmd=f"cd {caseSrcDir} && git checkout -f {kernel_commit}"
         Config.ExecuteCMD(checkoutcmd)
         
-        applykcovcmd=f"cd {caseSrcDir} && git apply {Config.KcovPatchPath}"
-        if Config.ExecuteCMD(applykcovcmd)[1].find("patch failed") != -1:
+        # kcov.diff was made against ~v5.15; neighbouring kernels often differ by one
+        # context line (e.g. v5.15-rc6 has an extra local_irq_save()), so retry with -C1.
+        applied=False
+        for contextArg in ("", "-C1"):
+            checkErr=Config.ExecuteCMD(f"cd {caseSrcDir} && git apply --check {contextArg} {Config.KcovPatchPath}")[1]
+            if "error" not in checkErr:
+                Config.ExecuteCMD(f"cd {caseSrcDir} && git apply {contextArg} {Config.KcovPatchPath}")
+                Config.logging.info(f"[case {caseIdx}] Applied kcov patch (git apply {contextArg or 'default context'})")
+                applied=True
+                break
+        if not applied:
             Config.logging.error(f"[case {caseIdx}] Fail to apply kcov patch!!! Please manually apply!!!")
         
         

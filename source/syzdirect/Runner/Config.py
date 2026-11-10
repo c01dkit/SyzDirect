@@ -1,4 +1,6 @@
 import argparse
+import contextlib
+import fcntl
 from enum import Enum
 import logging
 import os
@@ -165,8 +167,11 @@ def PreparePathVariables():
     
     ############### SET BY USER
     global CleanImageTemplatePath,KeyPath
-    CleanImageTemplatePath=""
-    KeyPath=""
+    # Overridable via env; defaults point to the llm4pca-local workdir
+    # (<llm4pca>/syzdirect-workdir/image, created by tools/create-image.sh -d bullseye).
+    DefaultImageDir=os.path.abspath(os.path.join(ResourceRoot,"..","..","..","syzdirect-workdir","image"))
+    CleanImageTemplatePath=os.environ.get("SYZDIRECT_IMAGE",os.path.join(DefaultImageDir,"bullseye.img"))
+    KeyPath=os.environ.get("SYZDIRECT_SSHKEY",os.path.join(DefaultImageDir,"bullseye.id_rsa"))
     assert os.path.exists(CleanImageTemplatePath), "Please offer clean image path"
     assert os.path.exists(KeyPath), "Please offer key path"
     
@@ -227,25 +232,54 @@ def PrepareBinary():
         ExecuteBigCMD(makecmd)
     assert os.path.exists(ClangPath), "Fails to build customized llvm(clang)"
         
+    # The original runner did `make clean && make` for every tool on every invocation,
+    # which races with other runs sharing these directories. Rebuild only when the binary
+    # is missing, or when SYZDIRECT_REBUILD=1 is set.
+    rebuild=os.environ.get("SYZDIRECT_REBUILD")=="1"
+
     ### function_model
-    logging.info("Building tool for function modeling")
-    build_function_model_cmd=f'cd {FunctionModelDirRoot} && make clean && make LLVM_BUILD={LLVMBuildDir}'
-    # print(ExecuteCMD(build_function_model_cmd)[0])
-    ExecuteBigCMD(build_function_model_cmd)
+    if rebuild or not os.path.exists(FunctionModelBinary):
+        logging.info("Building tool for function modeling")
+        build_function_model_cmd=f'cd {FunctionModelDirRoot} && make clean && make LLVM_BUILD={LLVMBuildDir}'
+        ExecuteBigCMD(build_function_model_cmd)
     assert os.path.exists(FunctionModelBinary), "Fails to build function modeling tool"
-    
+
     ### kernel_analysis
-    logging.info("Building tool for entry extract and distance calculation")
-    build_kernel_analysis_cmd=f"cd {TargetPointAnalysisDirRoot} && make clean && make LLVM_BUILD={LLVMBuildDir}"
-    ExecuteBigCMD(build_kernel_analysis_cmd)
+    if rebuild or not os.path.exists(TargetPointAnalysisBinary):
+        logging.info("Building tool for entry extract and distance calculation")
+        build_kernel_analysis_cmd=f"cd {TargetPointAnalysisDirRoot} && make clean && make LLVM_BUILD={LLVMBuildDir}"
+        ExecuteBigCMD(build_kernel_analysis_cmd)
     assert os.path.exists(TargetPointAnalysisBinary), "Fails to build tool for entry extract and distance calculation"
-    
+
     ### Fuzzer
-    logging.info("Building fuzzer")
-    build_fuzzer_cmd=f"cd {FuzzerDir} && make"
-    ExecuteBigCMD(build_fuzzer_cmd)
-    assert os.path.exists(FuzzerBinDir), "Fails to build fuzzer"
+    EnsureSharedFuzzerBuilt(force=rebuild)
     logging.info("Manual check is expected for all the binaries in the bin/, e.p. syz-fuzzer, syz-manager...")
+
+
+@contextlib.contextmanager
+def FuzzerBuildLock():
+    """Serialize every operation that rebuilds or reads the shared syzdirect_fuzzer/ tree.
+
+    Stage 4 writes constinp.json there, runs `make clean && make`, then moves bin/ away,
+    so two concurrent runs would otherwise clobber each other's binaries.
+    """
+    lockPath=os.path.join(FuzzerDir,".syzdirect-build.lock")
+    with open(lockPath,"w") as lockFile:
+        logging.info(f"Waiting for fuzzer build lock {lockPath}")
+        fcntl.flock(lockFile,fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lockFile,fcntl.LOCK_UN)
+
+
+def EnsureSharedFuzzerBuilt(force=False):
+    """Build the shared (non-customized) fuzzer if its binaries are missing. Takes the lock."""
+    with FuzzerBuildLock():
+        if force or not os.path.exists(SyzManagerPath):
+            logging.info("Building fuzzer")
+            ExecuteBigCMD(f"cd {FuzzerDir} && make")
+        assert os.path.exists(SyzManagerPath), "Fails to build fuzzer"
     
 def Prepare():
     

@@ -21,9 +21,9 @@ def MultirunFuzzer():
         template_config["sshkey"]=Config.KeyPath
         runCount = 1
 
-        # first build it again
+        # first build it again (no-op if already built; serialized with other runs)
         syzdirect_path = Config.FuzzerDir
-        os.system(f"cd {syzdirect_path}; make")
+        Config.EnsureSharedFuzzerBuilt()
 
         # collect all xidxs
         tfmap=Config.ParseTargetFunctionsInfoFile(caseIdx)
@@ -45,10 +45,16 @@ def MultirunFuzzer():
             workRootDir = Config.getFuzzResultDirByCaseAndXidx(caseIdx, xidx)
             
             customized_syzkaller=Config.getCustomizedSyzByCaseAndXidx(caseIdx,xidx)
-            if os.path.exists(customized_syzkaller):
-                syzkaller_path = customized_syzkaller
-            else:
-                syzkaller_path = syzdirect_path
+            if not os.path.exists(customized_syzkaller):
+                # Stage 4 normally leaves a per-xidx copy; if not, snapshot the shared
+                # build so a concurrent rebuild of syzdirect_fuzzer/ can't break this run.
+                Config.logging.info(f"[case {caseIdx} xidx {xidx}] No per-xidx fuzzer, snapshotting shared build")
+                with Config.FuzzerBuildLock():
+                    shutil.copytree(Config.FuzzerBinDir, os.path.join(customized_syzkaller, "bin"))
+                    shutil.copytree(
+                        os.path.join(syzdirect_path, "sys/linux/test"),
+                        os.path.join(customized_syzkaller, "sys/linux/test"))
+            syzkaller_path = customized_syzkaller
             os.makedirs(workRootDir, exist_ok=True)
 
 
@@ -64,13 +70,18 @@ def MultirunFuzzer():
 
                 config["image"] = CLEAN_IMAGE_PATH
                 config["workdir"] = subWorkDir
-                config["http"] = f"0.0.0.0:{2345+runCount}"
+                # runCount restarts at 1 in every Main.py invocation, so concurrent runs
+                # need distinct bases (SYZDIRECT_HTTP_BASE) to avoid dashboard port clashes.
+                httpBase = int(os.environ.get("SYZDIRECT_HTTP_BASE", "2345"))
+                config["http"] = f"0.0.0.0:{httpBase+runCount}"
                 config['vm']['kernel'] = kernelImage
                 config['syzkaller'] = syzkaller_path
                 config['hitindex']=int(xidx)
                 
                 bug_title=datapoint['repro bug title']
-                if pd.isna(bug_title):
+                # Only set the stop condition when a title was actually given
+                # (original code had this inverted and never set it).
+                if not pd.isna(bug_title):
                     config['bugdesc']=bug_title
                 
 

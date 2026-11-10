@@ -134,7 +134,9 @@ sudo chmod 0755 $DIR
 
 # 1. debootstrap stage
 
-DEBOOTSTRAP_PARAMS="--arch=$DEBARCH --include=$PREINSTALL_PKGS --components=main,contrib,non-free $RELEASE $DIR"
+# KEYRING (optional env var): path to a newer debian-archive-keyring.gpg, needed when
+# the host's keyring is too old to verify the target release (e.g. Ubuntu 20.04 + bullseye).
+DEBOOTSTRAP_PARAMS="--arch=$DEBARCH ${KEYRING:+--keyring=$KEYRING} --include=$PREINSTALL_PKGS --components=main,contrib,non-free $RELEASE $DIR"
 if [ $FOREIGN = "true" ]; then
     DEBOOTSTRAP_PARAMS="--foreign $DEBOOTSTRAP_PARAMS"
 fi

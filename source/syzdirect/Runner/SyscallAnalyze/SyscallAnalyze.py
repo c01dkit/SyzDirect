@@ -11,7 +11,8 @@ def AnalyzeKernelInterface():
     Config.logging.info("Generating signature for syzkaller")
 
     syzkaller_signature_cmd=f"{Config.SyzFeaturePath} > {Config.SyzkallerSignaturePath}"
-    Config.ExecuteCMD(syzkaller_signature_cmd)
+    with Config.FuzzerBuildLock():  # syz-features lives in the shared fuzzer bin/
+        Config.ExecuteCMD(syzkaller_signature_cmd)
     assert os.path.exists(Config.SyzkallerSignaturePath) and os.stat(Config.SyzkallerSignaturePath).st_size!=0, "Fail to syzkaller signature!!!"
     Config.logging.info(f"Generating syzkaller signature successfully!")
     
@@ -57,8 +58,10 @@ def AnalyzeTargetPoints():
     
     Config.logging.info("Generating syscall pair map")
     syscall_pair_map_cmd=f"cd {Config.WorkdirPrefix} && {Config.SyzTRMapPath}"
-    Config.ExecuteCMD(syscall_pair_map_cmd)
-    assert os.path.exists(Config.SyzTRMapPath), "Failed to generate syscall pair map. Please check"
+    with Config.FuzzerBuildLock():  # `direct` lives in the shared fuzzer bin/
+        Config.ExecuteCMD(syscall_pair_map_cmd)
+    # Original asserted on the binary path; check the generated map instead.
+    assert os.path.exists(Config.TRMapPath), "Failed to generate syscall pair map. Please check"
     Config.logging.info(f"Generating syscall pair map successfully!")
     
     for datapoint in Config.datapoints:

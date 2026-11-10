@@ -46,28 +46,37 @@ def PrepareForFuzzing(caseIdx, recommend_syscalls):
             shutil.rmtree(new_syzkaller_path)
 
         
-        with open(Refine_Input_File_Path, "w") as fp:
-            json.dump(constraints, fp)
-        
-            
-        Config.ExecuteCMD(f"cd {TheFuzzerPath}; make clean")
-        assert not os.path.exists(Config.FuzzerBinDir), "fuzzer make clean fails"
-
-        Config.ExecuteBigCMD(f"cd {TheFuzzerPath}; make")
-        os.remove(Refine_Input_File_Path)
-        
         refinedFile=Config.getConstOutFilePathByCaseAndXidx(caseIdx,xidx)
-        if os.path.exists(callTraceFile) and os.path.exists(Config.FuzzerBinDir):
-            shutil.move(Config.FuzzerBinDir, os.path.join(new_syzkaller_path, "bin"))
-            shutil.copytree(
-                os.path.join(TheFuzzerPath, "sys/linux/test"),
-                os.path.join(new_syzkaller_path, "sys/linux/test"))
-            shutil.move(
-                callTraceFile,
-                refinedFile)
-            Config.logging.info(f"[case {caseIdx} xidx {xidx}] Generated customized fuzzer")
-        else:
-            Config.logging.info(f"[case {caseIdx} xidx {xidx}] No customized fuzzer")
+        # Everything below touches the shared syzdirect_fuzzer/ tree -> serialize across runs.
+        with Config.FuzzerBuildLock():
+            with open(Refine_Input_File_Path, "w") as fp:
+                json.dump(constraints, fp)
+
+            Config.ExecuteCMD(f"cd {TheFuzzerPath}; make clean")
+            assert not os.path.exists(Config.FuzzerBinDir), "fuzzer make clean fails"
+
+            Config.ExecuteBigCMD(f"cd {TheFuzzerPath}; make")
+            os.remove(Refine_Input_File_Path)
+
+            if os.path.exists(callTraceFile) and os.path.exists(Config.FuzzerBinDir):
+                shutil.move(Config.FuzzerBinDir, os.path.join(new_syzkaller_path, "bin"))
+                shutil.copytree(
+                    os.path.join(TheFuzzerPath, "sys/linux/test"),
+                    os.path.join(new_syzkaller_path, "sys/linux/test"))
+                shutil.move(
+                    callTraceFile,
+                    refinedFile)
+                Config.logging.info(f"[case {caseIdx} xidx {xidx}] Generated customized fuzzer")
+            else:
+                # No argument refinement for this target. Snapshot the binaries just built
+                # into the per-xidx dir anyway, so fuzzing never runs out of the shared tree
+                # (which other runs rebuild).
+                Config.logging.info(f"[case {caseIdx} xidx {xidx}] No customized fuzzer, snapshotting default one")
+                assert os.path.exists(Config.FuzzerBinDir), "fuzzer build failed"
+                shutil.copytree(Config.FuzzerBinDir, os.path.join(new_syzkaller_path, "bin"))
+                shutil.copytree(
+                    os.path.join(TheFuzzerPath, "sys/linux/test"),
+                    os.path.join(new_syzkaller_path, "sys/linux/test"))
     
         outList = []
         targetCalls = all_calls[xidx]
@@ -198,6 +207,10 @@ def PrepareForFuzzing(caseIdx, recommend_syscalls):
             os.remove(outFile)
         with open(outFile, "w") as fp2:
             json.dump(outList, fp2)
+
+    # The loop above moves (or rebuilds with this case's constraints) the shared bin/;
+    # restore a default build so other runs' stage 3/4 tools (syz-features, direct) exist.
+    Config.EnsureSharedFuzzerBuilt(force=True)
         
 
 

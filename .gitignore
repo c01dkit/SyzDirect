@@ -1,0 +1,6 @@
+# Local build/run artifacts (llm4pca reproduction)
+__pycache__/
+source/syzdirect/syzdirect_function_model/build/
+source/syzdirect/syzdirect_kernel_analysis/build/
+source/syzdirect/*/build.log
+source/syzdirect/syzdirect_fuzzer/.syzdirect-build.lock
